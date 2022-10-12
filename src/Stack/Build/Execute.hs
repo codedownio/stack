@@ -1020,8 +1020,9 @@ withLockedDistDir announce root inner = do
 -- | How we deal with output from GHC, either dumping to a log file or the
 -- console (with some prefix).
 data OutputType
-  = OTLogFile !(Path Abs File) !Handle
-  | OTConsole !(Maybe Utf8Builder)
+  = OTLogFile        !(Path Abs File) !Handle
+  | OTConsole        !(Maybe Utf8Builder)
+  | OTConsoleWithTTY
 
 -- | This sets up a context for executing build steps which need to run
 -- Cabal (via a compiled Setup.hs).  In particular it does the following:
@@ -1119,7 +1120,10 @@ withSingleContext ActionContext {..} ee@ExecuteEnv {..} task@Task {..} allDeps m
         | boptsInterleavedOutput eeBuildOpts =
              inner $ OTConsole $ Just $ packageNamePrefix ee $ packageName package
 
-        -- Neither condition applies, dump to a file.
+        -- If the user requests a TTY for the process, provide it.
+        | boptsTestTty eeBuildOpts = inner $ OTConsoleWithTTY
+
+        -- Otherwise, dump to a file.
         | otherwise = do
             logPath <- buildLogPath package msuffix
             ensureDir (parent logPath)
@@ -1262,6 +1266,7 @@ withSingleContext ActionContext {..} ee@ExecuteEnv {..} task@Task {..} allDeps m
                         (mlogFile, bss) <-
                             case outputType of
                                 OTConsole _ -> return (Nothing, [])
+                                OTConsoleWithTTY -> undefined
                                 OTLogFile logFile h ->
                                     if keepOutputOpen == KeepOpen
                                     then return (Nothing, []) -- expected failure build continues further
@@ -1296,6 +1301,7 @@ withSingleContext ActionContext {..} ee@ExecuteEnv {..} task@Task {..} allDeps m
                             void $ sinkProcessStderrStdout (toFilePath exeName) fullArgs
                                 (outputSink KeepTHLoading LevelWarn compilerVer prefix)
                                 (outputSink stripTHLoading LevelInfo compilerVer prefix)
+                        OTConsoleWithTTY -> undefined
                     outputSink
                         :: HasCallStack
                         => ExcludeTHLoading
@@ -1977,6 +1983,7 @@ singleTest topts testsToRun ac ee task installedMap = do
                             logStickyDone ""
                             liftIO $ hFlush stdout
                             liftIO $ hFlush stderr
+                          OTConsoleWithTTY -> pure ()
                           OTLogFile _ _ -> pure ()
 
                         let output =
@@ -1989,6 +1996,7 @@ singleTest topts testsToRun ac ee task installedMap = do
                                                CL.map stripCR .|
                                                CL.mapM_ (\t -> logInfo $ prefix <> RIO.display t))
                                       createSource
+                                    OTConsoleWithTTY -> undefined
                                     OTLogFile _ h -> Nothing <$ useHandleOpen h
                             optionalTimeout action
                                 | Just maxSecs <- toMaximumTimeSeconds topts, maxSecs > 0 = do
@@ -2060,6 +2068,7 @@ singleTest topts testsToRun ac ee task installedMap = do
             bs <- liftIO $
                 case outputType of
                     OTConsole _ -> return ""
+                    OTConsoleWithTTY -> return ""
                     OTLogFile logFile h -> do
                         hClose h
                         S.readFile $ toFilePath logFile
@@ -2070,7 +2079,8 @@ singleTest topts testsToRun ac ee task installedMap = do
                 errs
                 (case outputType of
                    OTLogFile fp _ -> Just fp
-                   OTConsole _ -> Nothing)
+                   OTConsole _ -> Nothing
+                   OTConsoleWithTTY -> Nothing)
                 bs
 
             setTestStatus pkgDir $ if succeeded then TSSuccess else TSFailure

@@ -46,6 +46,7 @@ buildOptsFromMonoid BuildOptsMonoid{..} = BuildOpts
     , boptsSplitObjs = fromFirstFalse buildMonoidSplitObjs
     , boptsSkipComponents = buildMonoidSkipComponents
     , boptsInterleavedOutput = fromFirstTrue buildMonoidInterleavedOutput
+    , boptsTestTty = fromFirstFalse buildMonoidTestTty
     , boptsDdumpDir = getFirst buildMonoidDdumpDir
     }
   where

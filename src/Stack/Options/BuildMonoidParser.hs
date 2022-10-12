@@ -24,7 +24,7 @@ buildOptsMonoidParser hide0 =
     preFetch <*> keepGoing <*> keepTmpFiles <*> forceDirty <*>
     tests <*> testOptsParser hideBool <*> benches <*>
     benchOptsParser hideBool <*> reconfigure <*> cabalVerbose <*> splitObjs <*> skipComponents <*>
-    interleavedOutput <*> ddumpDir
+    interleavedOutput <*> testTty <*> ddumpDir
   where
     hideBool = hide0 /= BuildCmdGlobalOpts
     hide =
@@ -173,6 +173,11 @@ buildOptsMonoidParser hide0 =
         firstBoolFlagsTrue
             "interleaved-output"
             "Print concurrent GHC output to the console with a prefix for the package name"
+            hide
+    testTty =
+        firstBoolFlagsFalse
+            "test-tty"
+            "Make a TTY for test processes (for running terminal UI based tests)"
             hide
     ddumpDir =
         optionalFirst

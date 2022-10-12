@@ -96,6 +96,8 @@ data BuildOpts =
             ,boptsInterleavedOutput :: !Bool
             -- ^ Should we use the interleaved GHC output when building
             -- multiple packages?
+            ,boptsTestTty :: !Bool
+            -- ^ Should we allocate a TTY to test processes?
             ,boptsDdumpDir :: !(Maybe Text)
             }
   deriving (Show)
@@ -127,6 +129,7 @@ defaultBuildOpts = BuildOpts
     , boptsSplitObjs = defaultFirstFalse buildMonoidSplitObjs
     , boptsSkipComponents = []
     , boptsInterleavedOutput = defaultFirstTrue buildMonoidInterleavedOutput
+    , boptsTestTty = defaultFirstFalse buildMonoidTestTty
     , boptsDdumpDir = Nothing
     }
 
@@ -218,6 +221,7 @@ data BuildOptsMonoid = BuildOptsMonoid
     , buildMonoidSplitObjs :: !FirstFalse
     , buildMonoidSkipComponents :: ![Text]
     , buildMonoidInterleavedOutput :: !FirstTrue
+    , buildMonoidTestTty :: !FirstFalse
     , buildMonoidDdumpDir :: !(First Text)
     } deriving (Show, Generic)
 
@@ -253,6 +257,7 @@ instance FromJSON (WithJSONWarnings BuildOptsMonoid) where
               buildMonoidSplitObjs <- FirstFalse <$> o ..:? buildMonoidSplitObjsName
               buildMonoidSkipComponents <- o ..:? buildMonoidSkipComponentsName ..!= mempty
               buildMonoidInterleavedOutput <- FirstTrue <$> o ..:? buildMonoidInterleavedOutputName
+              buildMonoidTestTty <- FirstFalse <$> o ..:? buildMonoidTestTtyName
               buildMonoidDdumpDir <- o ..:? buildMonoidDdumpDirName ..!= mempty
               return BuildOptsMonoid{..})
 
@@ -333,6 +338,9 @@ buildMonoidSkipComponentsName = "skip-components"
 
 buildMonoidInterleavedOutputName :: Text
 buildMonoidInterleavedOutputName = "interleaved-output"
+
+buildMonoidTestTtyName :: Text
+buildMonoidTestTtyName = "test-tty"
 
 buildMonoidDdumpDirName :: Text
 buildMonoidDdumpDirName = "ddump-dir"

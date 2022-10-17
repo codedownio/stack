@@ -97,6 +97,10 @@ import           RIO.Process
 import           Pantry.Internal.Companion
 import           System.Random (randomIO)
 
+import           System.Posix.Terminal (queryTerminal)
+import           System.Posix.IO (stdOutput)
+import           System.Process.Typed (shell)
+
 -- | Has an executable been built or not?
 data ExecutableBuildStatus
     = ExecutableBuilt
@@ -1111,17 +1115,14 @@ withSingleContext ActionContext {..} ee@ExecuteEnv {..} task@Task {..} allDeps m
                 inner package cabalfp dir
 
     withOutputType pkgDir package inner
-        -- Not in interleaved mode. When building a single wanted package, dump
-        -- to the console with no prefix.
-        | console = inner $ OTConsole Nothing
+        -- Not in interleaved mode. When building a single wanted package, check if the
+        -- user has asked for a test TTY, and otherwise dump to the console with no prefix.
+        | console = inner $ if boptsTestTty eeBuildOpts then OTConsoleWithTTY else OTConsole Nothing
 
         -- If the user requested interleaved output, dump to the console with a
         -- prefix.
         | boptsInterleavedOutput eeBuildOpts =
              inner $ OTConsole $ Just $ packageNamePrefix ee $ packageName package
-
-        -- If the user requests a TTY for the process, provide it.
-        | boptsTestTty eeBuildOpts = inner $ OTConsoleWithTTY
 
         -- Otherwise, dump to a file.
         | otherwise = do
@@ -1266,7 +1267,7 @@ withSingleContext ActionContext {..} ee@ExecuteEnv {..} task@Task {..} allDeps m
                         (mlogFile, bss) <-
                             case outputType of
                                 OTConsole _ -> return (Nothing, [])
-                                OTConsoleWithTTY -> undefined
+                                OTConsoleWithTTY -> return (Nothing, [])
                                 OTLogFile logFile h ->
                                     if keepOutputOpen == KeepOpen
                                     then return (Nothing, []) -- expected failure build continues further
@@ -1301,7 +1302,9 @@ withSingleContext ActionContext {..} ee@ExecuteEnv {..} task@Task {..} allDeps m
                             void $ sinkProcessStderrStdout (toFilePath exeName) fullArgs
                                 (outputSink KeepTHLoading LevelWarn compilerVer prefix)
                                 (outputSink stripTHLoading LevelInfo compilerVer prefix)
-                        OTConsoleWithTTY -> undefined
+                        OTConsoleWithTTY -> do
+                          -- TODO: shell escape args
+                          runProcess_ $ shell $ T.unpack $ T.intercalate " " (fmap T.pack (toFilePath exeName : fullArgs))
                     outputSink
                         :: HasCallStack
                         => ExcludeTHLoading
@@ -1986,6 +1989,9 @@ singleTest topts testsToRun ac ee task installedMap = do
                           OTConsoleWithTTY -> pure ()
                           OTLogFile _ _ -> pure ()
 
+                        istty <- liftIO $ queryTerminal stdOutput
+                        liftIO $ S8.putStrLn ("Is a TTY: " <> S8.pack (show istty))
+
                         let output =
                                 case outputType of
                                     OTConsole Nothing -> Nothing <$ inherit
@@ -1996,7 +2002,7 @@ singleTest topts testsToRun ac ee task installedMap = do
                                                CL.map stripCR .|
                                                CL.mapM_ (\t -> logInfo $ prefix <> RIO.display t))
                                       createSource
-                                    OTConsoleWithTTY -> undefined
+                                    OTConsoleWithTTY -> Nothing <$ inherit
                                     OTLogFile _ h -> Nothing <$ useHandleOpen h
                             optionalTimeout action
                                 | Just maxSecs <- toMaximumTimeSeconds topts, maxSecs > 0 = do
@@ -2004,26 +2010,30 @@ singleTest topts testsToRun ac ee task installedMap = do
                                 | otherwise = Just <$> action
 
                         mec <- withWorkingDir (toFilePath pkgDir) $
-                          optionalTimeout $ proc (toFilePath exePath) args $ \pc0 -> do
-                            stdinBS <-
-                              if isTestTypeLib
-                                then do
-                                  logPath <- buildLogPath package (Just stestName)
-                                  ensureDir (parent logPath)
-                                  pure $ BL.fromStrict
-                                       $ encodeUtf8 $ fromString $
-                                       show (logPath, mkUnqualComponentName (T.unpack testName))
-                                else pure mempty
-                            let pc = setStdin (byteStringInput stdinBS)
-                                   $ setStdout output
-                                   $ setStderr output
-                                     pc0
-                            withProcessWait pc $ \p -> do
-                              case (getStdout p, getStderr p) of
-                                (Nothing, Nothing) -> pure ()
-                                (Just x, Just y) -> concurrently_ x y
-                                (x, y) -> assert False $ concurrently_ (fromMaybe (pure ()) x) (fromMaybe (pure ()) y)
-                              waitExitCode p
+                          case (istty, outputType) of
+                            (True, OTConsoleWithTTY) -> do
+                              -- TODO: shell escape args
+                              (Just <$>) $ runProcess $ shell $ T.unpack $ T.intercalate " " (fmap T.pack (toFilePath exePath : args))
+                            _ -> optionalTimeout $ proc (toFilePath exePath) args $ \pc0 -> do
+                              stdinBS <-
+                                if isTestTypeLib
+                                  then do
+                                    logPath <- buildLogPath package (Just stestName)
+                                    ensureDir (parent logPath)
+                                    pure $ BL.fromStrict
+                                         $ encodeUtf8 $ fromString $
+                                         show (logPath, mkUnqualComponentName (T.unpack testName))
+                                  else pure mempty
+                              let pc = setStdin (byteStringInput stdinBS)
+                                     $ setStdout output
+                                     $ setStderr output
+                                       pc0
+                              withProcessWait pc $ \p -> do
+                                case (getStdout p, getStderr p) of
+                                  (Nothing, Nothing) -> pure ()
+                                  (Just x, Just y) -> concurrently_ x y
+                                  (x, y) -> assert False $ concurrently_ (fromMaybe (pure ()) x) (fromMaybe (pure ()) y)
+                                waitExitCode p
                         -- Add a trailing newline, incase the test
                         -- output didn't finish with a newline.
                         case outputType of
